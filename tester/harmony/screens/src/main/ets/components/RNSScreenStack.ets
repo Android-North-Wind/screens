@@ -55,6 +55,17 @@ export struct RNSScreenStack {
   @State isReset: boolean = false;
   @State isResetAnimationPush: boolean = true;
   private logger!: RNOHLogger;
+  private screenEventEmitter: RNC.RNSScreen.EventEmitter | undefined = undefined
+  private backPressedFlag: boolean = false; // 返回按钮或系统返回触发标志
+  private backBtnPressed: () => void = () => {
+    if(this.backPressedFlag) {
+      this.screenEventEmitter!.emit("dismissed", {
+        dismissCount: 1,
+      })
+      this.screenEventEmitter!.emit("headerBackButtonClicked", {});
+      this.backPressedFlag = false;
+    }
+  }
 
   updateStack(newChildren: number[]) {
     if (!newChildren || newChildren.length === 0) {
@@ -171,6 +182,13 @@ export struct RNSScreenStack {
     this.replaceAnimation = replaceAnimation;
     this.presentation = presentation;
   }
+  
+  private backPressedChange(screenTag: number| undefined, backPressedFlag: boolean) {
+    if(screenTag) {
+      this.backPressedFlag = backPressedFlag;
+      this.screenEventEmitter = new RNC.RNSScreen.EventEmitter(this.ctx.rnInstance, screenTag)
+    }
+  }
 
   aboutToDisappear() {
     this.cleanUpCallbacks.forEach(cb => cb())
@@ -186,6 +204,7 @@ export struct RNSScreenStack {
       topInset: this.topInset,
       statusBarHeight: this.statusBarHeight,
       screenPropsChange: this.screenPropsChange.bind(this),
+      backPressedChange: this.backPressedChange.bind(this),
     })
   }
 
@@ -311,6 +330,7 @@ export struct RNSScreenStack {
           onFinish: () => {
             transitionProxy.finishTransition();
             this.eventEmitter!.emit("finishTransitioning", {})
+            this.backBtnPressed();
           }
         }, () => {
           currentAnimation.end(animationType);
