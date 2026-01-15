@@ -28,6 +28,7 @@ import { AnimateCallback, AnimationDefinition, CustomTransitionCoordinator } fro
 import { SafeAreaInsets } from '../utils/SafeAreaInsets';
 import { RNSScreen } from './RNSScreen';
 import { getAnimationConfig } from '../animations/AnimationHandler';
+import { RNSScreenDescriptor } from './RNSScreen';
 
 export type RNSScreenContainerDescriptor = Descriptor<"RNSScreenContainer", RNC.RNSScreenContainer.Props>
 
@@ -60,13 +61,26 @@ export struct RNSScreenContainer {
       return;
     }
     if (this.stack.length === 0) {
-      for (let i = 0; i < newChildren.length; i++) {
-        this.stackController.pushPathByName(newChildren[i].toString(), null)
+      if (newChildren && newChildren.length>0){
+        for(let i=0;i<newChildren.length;i++){
+          let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+          if (screenDescriptor){
+            this.onUpdate(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+          }
+        }
       }
       return;
     }
 
     if (JSON.stringify(this.stack) === JSON.stringify(newChildren)) {
+      if (newChildren && newChildren.length>0){
+        for(let i=0;i<newChildren.length;i++){
+          let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+          if (screenDescriptor){
+            this.onUpdate(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+          }
+        }
+      }
       return;
     }
 
@@ -93,7 +107,7 @@ export struct RNSScreenContainer {
       this.stackController.clear();
 
       for (let i = differentElementIndex; i < newChildren.length; i++) {
-        this.stackController.pushPathByName(newChildren[i].toString(), null)
+        this.stackController.pushPathByName(newChildren[i].toString(), null);
       }
       this.isReset = true;
       return;
@@ -102,12 +116,12 @@ export struct RNSScreenContainer {
     if (differentElementIndex !== -1) {
       if (newChildren.length -1 === this.stack.length && JSON.stringify(this.stack) === JSON.stringify(newChildren.slice(0, newChildren.length-1))) {
         for (let i = differentElementIndex; i < newChildren.length; i++) {
-          this.stackController.pushPathByName(newChildren[i].toString(), null)
+          this.stackController.pushPathByName(newChildren[i].toString(), null);
         }
       } else {
         this.stackController.popToIndex(differentElementIndex === -1 ? newChildren.length - 1 : differentElementIndex - 1)
         for (let i = differentElementIndex; i < newChildren.length; i++) {
-          this.stackController.pushPathByName(newChildren[i].toString(), null)
+          this.stackController.pushPathByName(newChildren[i].toString(), null);
         }
         this.isReset = true;
 
@@ -124,6 +138,17 @@ export struct RNSScreenContainer {
 
   onDescriptorChange() {
     const newChildren = this.descriptor.childrenTags;
+    if (newChildren && newChildren.length>0){
+      for(let i=0;i<newChildren.length;i++){
+        let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+        this.cleanUpCallbacks.push(this.ctx.descriptorRegistry.subscribeToDescriptorChanges(newChildren[i],
+          (newDescriptor) => {
+            screenDescriptor = (newDescriptor as RNSScreenDescriptor);
+            this.updateStack(newChildren);
+          }
+        ))
+      }
+    }
     this.updateStack(newChildren)
     this.stack = [...newChildren]
   }
@@ -167,6 +192,71 @@ export struct RNSScreenContainer {
     this.presentation = presentation;
   }
 
+  sortScreens(screenTag: string) {
+    let paths = this.stackController?.getAllPathName();
+    // 判断栈中是否存在
+    let screenTagTmp = paths.find((tag)=>{
+      if (tag === screenTag) {
+        return true;
+      } else {
+        return false;
+      }
+    })
+    if (screenTagTmp) {
+      return;
+    }
+    if(paths && paths.length>0 && screenTag){
+      // 从列表中获取screenTag需要插入的位置
+      let index = -1;
+      for(let i=paths.length-1;i>=0;i--){
+        if (Number(paths[i]) < Number(screenTag)) {
+          index = i;
+          break;
+        }
+      }
+      // screenTag入栈
+      this.stackController?.pushPathByName(screenTag, null, false);
+      // 栈排序，从上面插入位置将栈中按序移至栈顶，重新排序
+      for(let i = index+1;i <= paths.length;i++) {
+        this.stackController?.moveToTop(paths[i], false);
+      }
+    }
+  }
+  onUpdate(screenTag: string, activityState: number){
+    let paths: Array<string> = this.stackController?.getAllPathName();
+    let screenTagTmp: string| undefined = undefined;
+    if(paths && paths.length>0){
+      screenTagTmp = paths.find((tag)=>{
+        if (tag === screenTag) {
+          return true;
+        } else {
+         return false;
+        }
+      })
+      if(screenTagTmp) {
+        if (activityState !== 0) {
+          let len = this.stackController?.getAllPathName().length;
+          if(screenTagTmp !== paths[len-1]){
+            this.sortScreens(screenTag);
+          }
+        } else if(activityState === 0) {
+          this.stackController.moveToTop(screenTag, false);
+          this.stackController.pop(false);
+        }
+      } else {
+        if (activityState !== 0) {
+          this.sortScreens(screenTag);
+        } else if(activityState === 0) {
+        }
+      }
+    } else {
+      if (activityState !== 0) {
+        this.stackController?.pushPathByName(screenTag, null, false);
+      }
+      else if(activityState === 0) {
+      }
+    }
+  }
   aboutToDisappear() {
     this.cleanUpCallbacks.forEach(cb => cb())
   }
@@ -289,7 +379,6 @@ export struct RNSScreenContainer {
 
   build() {
     Stack() {
-      if (!this.isFirstNavigator || this.topInset !== 0) {
         Navigation(this.stackController)
           .mode(NavigationMode.Auto)
           .navDestination(this.navDestinationBuilder)
@@ -298,7 +387,6 @@ export struct RNSScreenContainer {
           .hideNavBar(true)
           .customNavContentTransition((from: NavContentInfo, to: NavContentInfo,
             operation: NavigationOperation) => this.customNavContentTransitionHandler(from, to, operation))
-      }
     }
   }
 }
