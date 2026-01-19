@@ -28,6 +28,7 @@ import { getAnimationConfig } from '../animations/AnimationHandler';
 import { AnimateCallback, AnimationDefinition, CustomTransitionCoordinator } from '../animations/CustomTransition';
 import { SafeAreaInsets } from '../utils/SafeAreaInsets';
 import { RNSScreen } from './RNSScreen';
+import { RNSScreenDescriptor } from './RNSScreen';
 
 export type RNSScreenStackDescriptor = Descriptor<"RNSScreenStack", RNC.RNSScreenStack.Props>
 
@@ -56,6 +57,7 @@ export struct RNSScreenStack {
   @State isResetAnimationPush: boolean = true;
   private logger!: RNOHLogger;
   private screenEventEmitter: RNC.RNSScreen.EventEmitter | undefined = undefined
+  private screenMaps: Map<string, number> = new Map();
   private backPressedFlag: boolean = false; // 返回按钮或系统返回触发标志
   private backBtnPressed: () => void = () => {
     if(this.backPressedFlag) {
@@ -72,13 +74,26 @@ export struct RNSScreenStack {
       return;
     }
     if (this.stack.length === 0) {
+      if (newChildren && newChildren.length>0){
       for (let i = 0; i < newChildren.length; i++) {
-        this.stackController.pushPathByName(newChildren[i].toString(), null)
+          let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+          if (screenDescriptor){
+            this.onUpdate(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+          }
+        }
       }
       return;
     }
 
     if (JSON.stringify(this.stack) === JSON.stringify(newChildren)) {
+      if (newChildren && newChildren.length>0){
+        for(let i=0;i<newChildren.length;i++){
+          let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+          if (screenDescriptor){
+            this.onUpdate(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+          }
+        }
+      }
       return;
     }
 
@@ -114,7 +129,17 @@ export struct RNSScreenStack {
     if (differentElementIndex !== -1) {
       if (newChildren.length -1 === this.stack.length && JSON.stringify(this.stack) === JSON.stringify(newChildren.slice(0, newChildren.length-1))) {
         for (let i = differentElementIndex; i < newChildren.length; i++) {
-          this.stackController.pushPathByName(newChildren[i].toString(), null)
+          // this.stackController.pushPathByName(newChildren[i].toString(), null)
+          // if (newChildren && newChildren.length>0){
+          //   for(let i=0;i<newChildren.length;i++){
+          //     let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+          //     if (screenDescriptor){
+          //       this.onUpdate(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+          //     }
+          //   }
+          // }
+          // this.onUpdate(newChildren[i].toString(), ); // todo edit mark
+          this.sortScreens(newChildren[i].toString()) // todo edit mark
         }
       } else {
         this.stackController.popToIndex(differentElementIndex === -1 ? newChildren.length - 1 : differentElementIndex - 1)
@@ -136,6 +161,20 @@ export struct RNSScreenStack {
 
   onDescriptorChange() {
     const newChildren = this.descriptor.childrenTags;
+    if (newChildren && newChildren.length>0){
+      for(let i=0;i<newChildren.length;i++){
+        let screenDescriptor = this.ctx.descriptorRegistry.getDescriptor<RNSScreenDescriptor>(newChildren[i]);
+        if(screenDescriptor){
+          this.screenMaps.set(newChildren[i]+'', screenDescriptor.rawProps['activityState']);
+        }
+        this.cleanUpCallbacks.push(this.ctx.descriptorRegistry.subscribeToDescriptorChanges(newChildren[i],
+          (newDescriptor) => {
+            screenDescriptor = (newDescriptor as RNSScreenDescriptor);
+            this.updateStack(newChildren);
+          }
+        ))
+      }
+    }
     this.updateStack(newChildren)
     this.stack = [...newChildren]
   }
@@ -187,6 +226,80 @@ export struct RNSScreenStack {
     if(screenTag) {
       this.backPressedFlag = backPressedFlag;
       this.screenEventEmitter = new RNC.RNSScreen.EventEmitter(this.ctx.rnInstance, screenTag)
+    }
+  }
+  sortScreens(screenTag: string) {
+    let paths = this.stackController?.getAllPathName();
+    // 判断栈中是否存在
+    let screenTagTmp = paths.find((tag)=>{
+      if (tag === screenTag) {
+        return true;
+      } else {
+        return false;
+      }
+    })
+    if (screenTagTmp) {
+      return;
+    }
+    if(paths && paths.length>0 && screenTag){
+      // 从列表中获取screenTag需要插入的位置
+      let index = -1;
+      for(let i=paths.length-1;i>=0;i--){
+        if (Number(paths[i]) < Number(screenTag)) {
+          index = i;
+          break;
+        }
+      }
+      // screenTag入栈
+      this.stackController?.pushPathByName(screenTag, null);
+      // 栈排序，从上面插入位置将栈中按序移至栈顶，重新排序
+      for(let i = index+1;i <= paths.length;i++) {
+        this.stackController?.moveToTop(paths[i], false);
+      }
+    }
+  }
+  onUpdate(screenTag: string, activityState: number){
+    if(this.screenMaps.get(screenTag)! !== activityState) {
+      if(activityState < this.screenMaps.get(screenTag)!){
+        // this.ctx.uiAbilityContext.terminateSelf(()=>{
+        //   console.info('test ets screenStack onUpdate 003 terminateSelf')
+        //   throw new Error("[RNScreens] activityState can only progress in NativeStack");
+        // });
+        throw new Error("[RNScreens] activityState can only progress in NativeStack");
+      } else {
+        this.screenMaps.set(screenTag, activityState)
+      }
+    }
+    let paths: Array<string> = this.stackController?.getAllPathName();
+    let screenTagTmp: string| undefined = undefined;
+    if(paths && paths.length>0){
+      screenTagTmp = paths.find((tag)=>{
+        if (tag === screenTag) {
+          return true;
+        } else {
+          return false;
+        }
+      })
+      if(screenTagTmp) {
+        if (activityState !== 0) {
+          let len = this.stackController?.getAllPathName().length;
+          if(screenTagTmp !== paths[len-1]){
+            this.sortScreens(screenTag);
+          }
+        } else if(activityState === 0) {
+        }
+      } else {
+        if (activityState !== 0) {
+          this.sortScreens(screenTag);
+        } else if(activityState === 0) {
+        }
+      }
+    } else {
+      if (activityState !== 0) {
+        this.stackController?.pushPathByName(screenTag, null);
+      }
+      else if(activityState === 0) {
+      }
     }
   }
 
